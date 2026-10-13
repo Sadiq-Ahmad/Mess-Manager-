@@ -1,4 +1,4 @@
-const CACHE = "mess-manager-v2";
+const CACHE = "mess-manager-v3";
 const FILES = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png", "./icon-maskable-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
@@ -6,9 +6,18 @@ self.addEventListener("install", e => {
 self.addEventListener("activate", e => {
   e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
+// Pehle cache se foran kholo (offline chale), saath saath net ho to naya version background mein le lo
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
   e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then(hit => hit || fetch(e.request).catch(() => caches.match("./index.html")))
+    caches.open(CACHE).then(cache =>
+      cache.match(e.request, { ignoreSearch: true }).then(hit => {
+        const net = fetch(e.request).then(res => {
+          if (res && res.ok && new URL(e.request.url).origin === location.origin) cache.put(e.request, res.clone());
+          return res;
+        }).catch(() => hit || cache.match("./index.html"));
+        return hit || net;
+      })
+    )
   );
 });

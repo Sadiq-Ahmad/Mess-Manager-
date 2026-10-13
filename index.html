@@ -163,6 +163,14 @@ const nameOf = id => (S.members.find(m => m.id === id) || { name: "?" }).name;
 const av = (id, cls = "") => `<div class="av ${cls}">${esc(nameOf(id).trim().charAt(0).toUpperCase() || "?")}</div>`;
 const activeMembers = () => S.members.filter(m => m.active);
 const inR = (x, a, b) => x >= a && x <= b;
+// kya yeh banda us tareekh ko mess mein tha? (Band hone ki tareekh se pehle tak hi gina jata hai)
+const here = (id, d) => { const m = S.members.find(x => x.id === id); return !!m && (m.active || (!!m.left && d < m.left)); };
+const memWarn = id => {
+  const n = S.expenses.filter(x => x.mid === id).length;
+  const h = Object.values(S.att).filter(ids => ids.includes(id)).length;
+  return n + h === 0 ? "Is ka koi record nahi, seedha delete ho jaye ga. Dobara dabayen."
+    : `Is ke ${n} kharchay aur ${h} hazriyan bhi delete ho jayen gi aur hisab badal jaye ga. Behtar hai "Band" karein. Phir bhi delete karna hai to dobara dabayen.`;
+};
 const niceDate = s => { const d = new Date(s + "T00:00:00"); return d.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }); };
 
 function range(kind) {
@@ -180,7 +188,8 @@ function calc(a, b) {
   const paid = {}, meals = {};
   S.expenses.forEach(e => { if (inR(e.date, a, b)) paid[e.mid] = (paid[e.mid] || 0) + e.amount; });
   Object.entries(S.att).forEach(([k, ids]) => {
-    if (inR(k.split("|")[0], a, b)) ids.forEach(i => meals[i] = (meals[i] || 0) + 1);
+    const d = k.split("|")[0];
+    if (inR(d, a, b)) ids.forEach(i => { if (here(i, d)) meals[i] = (meals[i] || 0) + 1; });
   });
   const total = Object.values(paid).reduce((s, x) => s + x, 0);
   const tm = Object.values(meals).reduce((s, x) => s + x, 0);
@@ -210,7 +219,7 @@ function settle(rows) {
 function daily(a, b) {
   const m = {};
   S.expenses.forEach(e => { if (inR(e.date, a, b)) { m[e.date] = m[e.date] || { amt: 0, meals: 0 }; m[e.date].amt += e.amount; } });
-  Object.entries(S.att).forEach(([k, ids]) => { const d = k.split("|")[0]; if (m[d]) m[d].meals += ids.length; });
+  Object.entries(S.att).forEach(([k, ids]) => { const d = k.split("|")[0]; if (m[d]) m[d].meals += ids.filter(i => here(i, d)).length; });
   return Object.entries(m).sort((x, y) => y[0].localeCompare(x[0]));
 }
 
@@ -235,13 +244,17 @@ const ui = {
 };
 [ui.from, ui.to] = range("month");
 
+function migrate() {
+  if (!S.att) S.att = {};
+  S.members.forEach(m => { if (!m.active && !m.left) m.left = today(); });
+}
 function loadAtt() {
   const saved = S.att[ui.attDate + "|" + ui.meal];
   ui.attSaved = !!saved;
-  const valid = new Set(S.members.map(m => m.id));
-  ui.checked = new Set(saved ? saved.filter(i => valid.has(i)) : activeMembers().map(m => m.id));
+  const act = new Set(activeMembers().map(m => m.id));
+  ui.checked = new Set(saved ? saved.filter(i => act.has(i)) : act);
 }
-loadAtt();
+migrate(); save(); loadAtt();
 
 const ICONS = {
   exp: '<svg viewBox="0 0 24 24"><path d="M3 7h15a3 3 0 0 1 3 3v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><path d="M3 7l12-3v3"/><circle cx="16.5" cy="14" r="1.2"/></svg>',
@@ -289,7 +302,7 @@ function viewExp() {
 function viewAtt() {
   const am = activeMembers();
   if (!am.length) return NOMEM;
-  const hist = Object.entries(S.att).map(([k, ids]) => { const [d, m] = k.split("|"); return { d, m, ids }; })
+  const hist = Object.entries(S.att).map(([k, ids]) => { const [d, m] = k.split("|"); return { d, m, ids: ids.filter(i => here(i, d)) }; })
     .sort((x, y) => y.d.localeCompare(x.d) || MEALS.indexOf(y.m) - MEALS.indexOf(x.m)).slice(0, 30);
   return `
   <div class="card"><h2>Kis din, kon sa khana?</h2>
@@ -368,9 +381,10 @@ function viewMem() {
   </div>
   <div class="card"><h2>Saray members (${S.members.length})</h2>
     ${S.members.length ? S.members.map(m => `
-      <div class="item">${av(m.id)}<div class="l"><div>${esc(m.name)}</div><div>${m.active ? "Active" : "Band (purana hisab mehfooz)"}</div></div>
-      <button class="small" data-act="togMem" data-id="${m.id}">${m.active ? "Band" : "Active"}</button></div>`).join("") : `<div class="empty">Abhi koi member nahi.</div>`}
-    <div class="sum" style="margin-top:10px">Jo banda mess chor jaye use "Band" kar dein, purana hisab wesa hi rahega.</div>
+      <div class="item">${av(m.id)}<div class="l"><div>${esc(m.name)}</div><div>${m.active ? "Active" : "Band" + (m.left ? " (" + niceDate(m.left) + " se)" : "")}</div>${ui.pendingMem === m.id ? `<div class="bad">${memWarn(m.id)}</div>` : ""}</div>
+      <button class="small" data-act="togMem" data-id="${m.id}">${m.active ? "Band" : "Active"}</button>
+      <button class="small ${ui.pendingMem === m.id ? "confirm" : "danger"}" data-act="delMem" data-id="${m.id}">${ui.pendingMem === m.id ? "Pakka?" : "🗑"}</button></div>`).join("") : `<div class="empty">Abhi koi member nahi.</div>`}
+    <div class="sum" style="margin-top:10px">Jo banda mess chor jaye use "Band" kar dein: aaj se us ka khana aur hissa nahi lagay ga, purana hisab wesa hi rahega. Bilkul hata'na ho to 🗑 dabayen.</div>
   </div>
   <div class="card"><h2>Data ka backup</h2>
     <div class="sum">Data is phone mein save hota hai. Phone badalne ya browser saaf karne se pehle backup zaroor lein.</div>
@@ -424,6 +438,7 @@ document.addEventListener("click", async e => {
   const act = el.dataset.act, id = Number(el.dataset.id);
   ui.msg = ""; ui.warn = false;
   if (act !== "delExp") ui.pendingDel = null;
+  if (act !== "delMem") ui.pendingMem = null;
   const fail = m => { ui.msg = m; ui.warn = true; };
 
   if (act === "tab") { ui.tab = el.dataset.k; if (ui.tab === "att") loadAtt(); window.scrollTo(0, 0); }
@@ -434,7 +449,26 @@ document.addEventListener("click", async e => {
     if (S.members.some(m => m.name.toLowerCase() === n.toLowerCase())) fail(`"${n}" pehle se mojood hai.`);
     else { S.members.push({ id: S.nid++, name: n, active: true }); save(); loadAtt(); ui.msg = `${n} add ho gaya.`; }
   }
-  else if (act === "togMem") { const m = S.members.find(m => m.id === id); if (m) { m.active = !m.active; save(); loadAtt(); } }
+  else if (act === "togMem") {
+    const m = S.members.find(m => m.id === id);
+    if (m) {
+      if (m.active) {
+        m.active = false; m.left = today();
+        Object.keys(S.att).forEach(k => { if (k.split("|")[0] >= m.left) S.att[k] = S.att[k].filter(i => i !== m.id); });
+        ui.msg = `${m.name} band ho gaya. Aaj se is ka khana aur hissa nahi lagay ga.`;
+      } else { m.active = true; delete m.left; ui.msg = `${m.name} dobara active ho gaya.`; }
+      save(); loadAtt();
+    }
+  }
+  else if (act === "delMem") {
+    if (ui.pendingMem === id) {
+      const nm = nameOf(id);
+      S.members = S.members.filter(m => m.id !== id);
+      S.expenses = S.expenses.filter(x => x.mid !== id);
+      Object.keys(S.att).forEach(k => { S.att[k] = S.att[k].filter(i => i !== id); });
+      save(); ui.pendingMem = null; loadAtt(); ui.msg = `${nm} delete ho gaya.`;
+    } else ui.pendingMem = id;
+  }
 
   else if (act === "qi") { ui.item = el.dataset.v === "Doosra" ? "" : el.dataset.v; }
   else if (act === "addExp") {
@@ -458,7 +492,9 @@ document.addEventListener("click", async e => {
   else if (act === "allOn") ui.checked = new Set(activeMembers().map(m => m.id));
   else if (act === "allOff") ui.checked = new Set();
   else if (act === "saveAtt") {
-    S.att[ui.attDate + "|" + ui.meal] = [...ui.checked]; save(); ui.attSaved = true;
+    const key = ui.attDate + "|" + ui.meal;
+    const keep = (S.att[key] || []).filter(i => { const m = S.members.find(x => x.id === i); return m && !m.active && m.left && ui.attDate < m.left; });
+    S.att[key] = [...new Set([...ui.checked, ...keep])]; save(); ui.attSaved = true;
     ui.msg = `✅ Save ho gaya: ${niceDate(ui.attDate)} ${ui.meal} - ${ui.checked.size} log.`;
   }
 
@@ -489,7 +525,7 @@ document.addEventListener("change", e => {
       const d = JSON.parse(rd.result);
       if (!Array.isArray(d.members) || !Array.isArray(d.expenses) || typeof d.att !== "object") throw 0;
       S = { members: d.members, expenses: d.expenses, att: d.att, nid: d.nid || 1000000 };
-      save(); loadAtt(); ui.msg = "Backup wapis aa gaya."; ui.warn = false;
+      migrate(); save(); loadAtt(); ui.msg = "Backup wapis aa gaya."; ui.warn = false;
     } catch (err) { ui.msg = "Yeh sahi backup file nahi hai."; ui.warn = true; }
     render();
   };
